@@ -48,9 +48,11 @@ jobs:
           test -f "$GITHUB_WORKSPACE/ps4sdk/samples/graphics/sce_sys/about/right.sprx"
 
           cd ../../samples/graphics
-          sed -i 's/OpenOrbis Graphics Sample/ROBERTO PS4 TEST/g' Makefile
-          sed -i 's/BREW00082/ASCI10001/g' Makefile
-          sed -i 's/GRAPHICSEX000000/ASCII3DTEST00000/g' Makefile
+          cp "$GITHUB_WORKSPACE/ps4-ascii/main.cpp" graphics/main.cpp
+          sed -i 's/OpenOrbis Graphics Sample/ASCII REALM TEST 02/g' Makefile
+          sed -i 's/BREW00082/ASCI10002/g' Makefile
+          sed -i 's/GRAPHICSEX000000/ASCIIREALM0000000/g' Makefile
+          sed -i 's/LIBS        := -lc -lkernel -lc++ -lSceVideoOut/LIBS        := -lc -lkernel -lc++ -lSceVideoOut -lScePad -lSceUserService/g' Makefile
           make pkg.gp4
 
           # OpenOrbis packager requires older OpenSSL libraries. Keep packaging
@@ -78,7 +80,7 @@ jobs:
       - name: Publish PS4 PKG
         uses: actions/upload-artifact@v4
         with:
-          name: ROBERTO-PS4-TEST-PKG
+          name: ASCII-REALM-PS4-TEST-02
           path: ps4sdk/samples/graphics/*.pkg
           if-no-files-found: error
           retention-days: 7
