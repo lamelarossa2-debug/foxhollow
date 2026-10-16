@@ -11,54 +11,62 @@ permissions:
 
 jobs:
   build-ps4-pkg:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 25
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout test branch
         uses: actions/checkout@v4
 
-      - name: Checkout official OpenOrbis sources
-        uses: actions/checkout@v4
-        with:
-          repository: OpenOrbis/OpenOrbis-PS4-Toolchain
-          ref: master
-          path: openorbis-source
-
-      - name: Build video test and PS4 package inside OpenOrbis Docker SDK
+      - name: Download matching OpenOrbis v0.5.4 toolchain and source
         run: |
           set -euxo pipefail
-          docker pull openorbisofficial/toolchain:v0.5.1
-          docker run --rm --user 0 \
-            --volume "$GITHUB_WORKSPACE:/workspace" \
-            --workdir /workspace/openorbis-source \
-            openorbisofficial/toolchain:v0.5.1 \
-            bash -euc '
-              cd src/modules
-              bash build-and-copy.sh
-              cd ../../samples/graphics
-              sed -i "s/OpenOrbis Graphics Sample/ROBERTO PS4 TEST/g" Makefile
-              sed -i "s/BREW00082/ASCI10001/g" Makefile
-              sed -i "s/GRAPHICSEX000000/ASCII3DTEST00000/g" Makefile
-              make
-              ls -lh ./*.pkg
-            '
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.4/toolchain-llvm-18.tar.gz \
+            --output /tmp/openorbis-v0.5.4.tar.gz
+          mkdir -p ps4sdk
+          tar -xzf /tmp/openorbis-v0.5.4.tar.gz -C ps4sdk --strip-components=2
+          test -f ps4sdk/link.x
+          test -x ps4sdk/bin/linux/create-fself
+          ls -lh ps4sdk/bin/linux/
 
-      - name: Make sure a real PKG was created
+      - name: Compile modules, graphics demo and PS4 PKG
+        run: |
+          set -euxo pipefail
+          export OO_PS4_TOOLCHAIN="$GITHUB_WORKSPACE/ps4sdk"
+          export PATH="$OO_PS4_TOOLCHAIN/bin/linux:$PATH"
+          clang --version
+          ld.lld --version
+
+          cd ps4sdk/src/modules
+          bash build-and-copy.sh
+
+          test -f "$GITHUB_WORKSPACE/ps4sdk/samples/graphics/sce_module/libc.prx"
+          test -f "$GITHUB_WORKSPACE/ps4sdk/samples/graphics/sce_module/libSceFios2.prx"
+          test -f "$GITHUB_WORKSPACE/ps4sdk/samples/graphics/sce_sys/about/right.sprx"
+
+          cd ../../samples/graphics
+          sed -i 's/OpenOrbis Graphics Sample/ROBERTO PS4 TEST/g' Makefile
+          sed -i 's/BREW00082/ASCI10001/g' Makefile
+          sed -i 's/GRAPHICSEX000000/ASCII3DTEST00000/g' Makefile
+          make
+          ls -lh ./*.pkg
+
+      - name: Verify PS4 package exists
         run: |
           set -euo pipefail
           shopt -s nullglob
-          packages=(openorbis-source/samples/graphics/*.pkg)
+          packages=(ps4sdk/samples/graphics/*.pkg)
           if [ "${#packages[@]}" -eq 0 ]; then
-            echo "::error::The toolchain did not produce a PS4 PKG"
+            echo "::error::No PKG produced"
             exit 1
           fi
           file "${packages[@]}"
           ls -lh "${packages[@]}"
 
-      - name: Upload installable PS4 PKG
+      - name: Publish PS4 PKG
         uses: actions/upload-artifact@v4
         with:
           name: ROBERTO-PS4-TEST-PKG
-          path: openorbis-source/samples/graphics/*.pkg
+          path: ps4sdk/samples/graphics/*.pkg
           if-no-files-found: error
           retention-days: 7
