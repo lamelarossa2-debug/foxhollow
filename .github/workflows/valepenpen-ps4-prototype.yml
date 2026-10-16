@@ -1,0 +1,75 @@
+name: ValePenPen PS4 - test PKG
+
+on:
+  push:
+    branches:
+      - valepenpen-ps4-prototype
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-valepenpen:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout ValePenPen prototype
+        uses: actions/checkout@v4
+
+      - name: Download OpenOrbis 0.5.4 LLVM18
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.4/toolchain-llvm-18.tar.gz \
+            -o /tmp/openorbis-v0.5.4.tar.gz
+          mkdir -p ps4sdk
+          tar -xzf /tmp/openorbis-v0.5.4.tar.gz -C ps4sdk --strip-components=2
+          test -f ps4sdk/link.x
+          test -x ps4sdk/bin/linux/create-fself
+
+      - name: Compile ValePenPen and produce PS4 package project
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export OO_PS4_TOOLCHAIN="$GITHUB_WORKSPACE/ps4sdk"
+          export PATH="$OO_PS4_TOOLCHAIN/bin/linux:$PATH"
+          sudo apt-get update -qq
+          sudo apt-get install -y lld-18
+          sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
+          cd ps4sdk/src/modules
+          bash build-and-copy.sh
+          test -f "$OO_PS4_TOOLCHAIN/samples/graphics/sce_module/libc.prx"
+          test -f "$OO_PS4_TOOLCHAIN/samples/graphics/sce_module/libSceFios2.prx"
+          cd "$OO_PS4_TOOLCHAIN/samples/graphics"
+          cp "$GITHUB_WORKSPACE/ps4-valepenpen/main.cpp" graphics/main.cpp
+          cp "$GITHUB_WORKSPACE/ps4-valepenpen/packed_art.h" graphics/packed_art.h
+          sed -i 's/OpenOrbis Graphics Sample/ValePenPen PS4 Demo/g' Makefile
+          sed -i 's/BREW00082/VALE10001/g' Makefile
+          sed -i 's/GRAPHICSEX000000/VALEPENPENDEMO01/g' Makefile
+          sed -i 's|^LIBS[[:space:]]*:=.*|LIBS        := -lc -lkernel -lc++ -lSceVideoOut -lScePad -lSceUserService|' Makefile
+          sed -i 's/#EXTRAFLAGS  :=/EXTRAFLAGS  := -O2/' Makefile
+          make pkg.gp4
+          test -f pkg.gp4
+
+      - name: Build PKG in compatible OpenOrbis packager
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker pull openorbisofficial/toolchain:v0.5.1
+          docker run --rm --user 0 \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace/ps4sdk/samples/graphics \
+            openorbisofficial/toolchain:v0.5.1 \
+            bash -ec 'PkgTool.Core pkg_build pkg.gp4 .'
+          find ps4sdk/samples/graphics -maxdepth 1 -type f -name '*.pkg' -ls
+          test -n "$(find ps4sdk/samples/graphics -maxdepth 1 -type f -name '*.pkg' -print -quit)"
+
+      - name: Publish installable test PKG
+        uses: actions/upload-artifact@v4
+        with:
+          name: VALEPENPEN-PS4-DEMO-01
+          path: ps4sdk/samples/graphics/*.pkg
+          if-no-files-found: error
+          retention-days: 7
