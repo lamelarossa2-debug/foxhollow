@@ -13,8 +13,9 @@
 
 std::stringstream debugLogStream;
 static const int SW = 1920, SH = 1080;
-static const int COLS = 104, ROWS = 47, CW=16, CH=18;
-static const int LEFT = 128, TOP = 120;
+// Native 1920x1080 full-bleed character grid (no black frame/margins).
+static const int COLS = 120, ROWS = 60, CW=16, CH=18;
+static const int LEFT = 0, TOP = 0;
 struct RGB { unsigned char r,g,b; };
 static RGB color(int r,int g,int b){ RGB k={(uint8_t)r,(uint8_t)g,(uint8_t)b}; return k; }
 static Color toColor(RGB a){ Color c={a.r,a.g,a.b};return c;}
@@ -119,7 +120,7 @@ static RGB mix(RGB a,RGB b,float k){
  if(k<0)k=0;if(k>1)k=1;
  return color((int)(a.r*(1-k)+b.r*k),(int)(a.g*(1-k)+b.g*k),(int)(a.b*(1-k)+b.b*k));
 }
-static void draw_world(Scene2D *s,float cx,float cy,int frame,int pulse) {
+static void draw_world(Scene2D *s,float cx,float cy,int frame,int pulse,int walking,int face,int shiftX,int shiftY) {
  RGB ink;char ch;
  const float tt=frame*0.027f;
  for(int y=0;y<ROWS;y++){
@@ -134,10 +135,15 @@ static void draw_world(Scene2D *s,float cx,float cy,int frame,int pulse) {
    float grit=hash2((int)floorf(wx*2.1f),(int)floorf(wy*2.1f));
    int px=LEFT+x*CW,py=TOP+y*CH;
    // Intensity falloff at the edges; stronger torches around player.
-   float spot=1.0f-sqrtf(dx*dx*0.00031f+dy*dy*0.00108f);
-   if(spot<0.18f)spot=0.18f;
-   float boost=pulse>0?0.18f*(1.0f-fminf(1.0f,sqrtf(dx*dx+dy*dy)/(pulse*2.2f+1.0f))):0.0f;
-   spot=fminf(1.0f,spot+boost);
+   float distance=sqrtf(dx*dx+(dy*1.12f)*(dy*1.12f));
+   // Maintain a readable world, with a soft vignette instead of obscuring terrain.
+   float spot=0.91f-0.0052f*distance;
+   if(spot<0.56f)spot=0.56f;
+   // X emits a small travelling LIGHT RING, not a fullscreen brightening.
+   float ring=pulse>0 ? (40-pulse)*0.42f : -100.0f;
+   float rim=fabsf(distance-ring);
+   bool waveFront=(pulse>0 && rim<1.55f && distance<18.0f);
+   if(waveFront)spot=fminf(1.0f,spot+(1.55f-rim)*0.40f);
    if(d<shore){
     float wave=sinf(wx*1.4f+tt)*cosf(wy*0.9f+tt*0.71f);
     ch=(wave>0.55f)?'=':((wave<-0.55f)?'-':((grit>0.8f)?'~':'.'));
@@ -171,21 +177,28 @@ static void draw_world(Scene2D *s,float cx,float cy,int frame,int pulse) {
       ch=(grit>0.7f)?'#':'=';ink=color(94,107,110);
     }
    }
-   // Edge brightness and shading with atmospheric depth.
+   // Local cyan pulse wave; the surrounding terrain retains its own shading.
+   if(waveFront && hash2(x+frame/3,y)>0.31f){
+     ch='*'; ink=mix(ink,color(75,219,230),0.64f);
+   }
    ink=mix(color(3,12,21),ink,spot);
    drawChar(s,px+2,py+2,ch,ink,2);
   }
  }
- // Actual player, fixed at center, with visible silhouette.
- int X=LEFT+(COLS/2)*CW-18, Y=TOP+(ROWS/2)*CH-35;
- RGB shade=color(24,34,41),gold=color(255,208,112),robe=color(206,169,124);
- // Slight glow around player, without sprite assets.
- text(s,X-14,Y-20,"   .  ",color(50,86,79),2);
- text(s,X,Y,"  ^  ",gold,3);
- text(s,X,Y+25," (@) ",gold,3);
- text(s,X,Y+50," /#\\ ",robe,3);
- text(s,X,Y+75," / \\ ",shade,3);
- if(pulse>0 && pulse%8<5)text(s,X-22,Y+38,"*     *",color(103,224,203),3);
+ // Player is visibly animated and drifts briefly as camera follows.
+ int X=SW/2-49+shiftX;
+ int Y=SH/2-72+shiftY;
+ int step=walking ? ((frame/6)%2) : 0;
+ int bob=walking ? (step ? 4 : -3) : 0;
+ RGB gold=color(244,210,116), robe=color(210,172,117);
+ RGB faceColor=face==0?color(239,193,116):color(138,173,157);
+ text(s,X+22,Y-25+bob,".^.",color(78,187,184),2);
+ text(s,X,Y+bob,    "  /^\\  ",gold,3);
+ text(s,X,Y+23+bob, "  (O)  ",faceColor,3);
+ text(s,X,Y+46+bob, walking && step ? " \\###/ " : " /###\\ ",robe,3);
+ text(s,X,Y+70+bob, walking ? (step?"  /|\\  ":"  / \\  ") : "  / \\  ",color(124,156,171),3);
+ if(walking && frame%12<6) text(s,X+12,Y+104,".  .",color(117,180,162),2);
+ if(pulse>32) text(s,X-17,Y+36,"*       *",color(92,236,234),3);
 }
 int main(){
  setvbuf(stdout,NULL,_IONBF,0);
@@ -200,35 +213,44 @@ int main(){
      pad=scePadOpen(userID,0,0,NULL);
    connected=pad>=0;
  }
- float cx=0,cy=0;int pulse=0,frame=0;uint32_t oldButtons=0;
+ float cx=0,cy=0,camx=0,camy=0;int pulse=0,frame=0,face=0;uint32_t oldButtons=0;
  for(;;){
    uint32_t buttons=0;
+   float oldCx=cx,oldCy=cy;
    if(connected){
      OrbisPadData data={};
      if(scePadReadState(pad,&data)==0){
        buttons=data.buttons;
        float ax=((float)data.leftStick.x-128.0f)/127.0f;
        float ay=((float)data.leftStick.y-128.0f)/127.0f;
-       if(fabsf(ax)>0.17f)cx+=ax*0.10f;
-       if(fabsf(ay)>0.17f)cy+=ay*0.10f;
+       // Stronger camera displacement: the previous movement was hardly visible.
+       if(fabsf(ax)>0.17f)cx+=ax*0.38f;
+       if(fabsf(ay)>0.17f)cy+=ay*0.38f;
      }
    }
-   if(buttons&ORBIS_PAD_BUTTON_LEFT)cx-=0.11f;
-   if(buttons&ORBIS_PAD_BUTTON_RIGHT)cx+=0.11f;
-   if(buttons&ORBIS_PAD_BUTTON_UP)cy-=0.11f;
-   if(buttons&ORBIS_PAD_BUTTON_DOWN)cy+=0.11f;
+   if(buttons&ORBIS_PAD_BUTTON_LEFT)cx-=0.38f;
+   if(buttons&ORBIS_PAD_BUTTON_RIGHT)cx+=0.38f;
+   if(buttons&ORBIS_PAD_BUTTON_UP)cy-=0.38f;
+   if(buttons&ORBIS_PAD_BUTTON_DOWN)cy+=0.38f;
+   bool walking=(fabsf(cx-oldCx)+fabsf(cy-oldCy))>0.012f;
+   if(walking)face=(fabsf(cy-oldCy)>fabsf(cx-oldCx))?(cy>oldCy?2:0):(cx>oldCx?1:3);
+   // Camera eases toward the player, visibly showing movement.
+   camx+=(cx-camx)*0.115f;
+   camy+=(cy-camy)*0.115f;
+   int shiftX=(int)((cx-camx)*13.0f);
+   int shiftY=(int)((cy-camy)*11.0f);
    if((buttons&ORBIS_PAD_BUTTON_CROSS) && !(oldButtons&ORBIS_PAD_BUTTON_CROSS))pulse=40;
    oldButtons=buttons;
    if(pulse>0)pulse--;
    rect(scene,0,0,SW,SH,color(4,9,17));
-   rect(scene,LEFT-17,TOP-17,COLS*CW+34,ROWS*CH+34,color(17,34,45));
-   rect(scene,LEFT-10,TOP-10,COLS*CW+20,ROWS*CH+20,color(2,8,14));
-   draw_world(scene,cx,cy,frame,pulse);
-   rect(scene,110,52,1695,42,color(4,19,25));
-   text(scene,137,62,"ASCII REALM  -  PS4 RENDER TEST 02",color(121,231,191),3);
-   rect(scene,110,990,1695,38,color(4,19,25));
-   text(scene,135,998,"LEFT STICK / D-PAD: MOVE     X: PULSE     NATIVE ASCII ENGINE",color(153,207,186),2);
-   if(!connected)text(scene,1490,64,"NO PAD",color(245,104,101),2);
+   draw_world(scene,camx,camy,frame,pulse,walking,face,shiftX,shiftY);
+   // Minimal overlay HUD; world now renders across every edge of the screen.
+   rect(scene,0,0,SW,52,color(4,19,25));
+   text(scene,26,11,"ASCII REALM  -  PS4 TEST 03  /  FULLSCREEN",color(121,231,191),3);
+   rect(scene,0,1034,SW,46,color(4,19,25));
+   text(scene,25,1046,"LEFT STICK / D-PAD: WALK       X: LOCAL MAGIC PULSE",color(153,207,186),2);
+   text(scene,1510,1046,walking ? "WALKING" : "STANDING",walking ? color(248,219,113) : color(113,190,175),2);
+   if(!connected)text(scene,1700,15,"NO PAD",color(245,104,101),2);
    scene->SubmitFlip(frame);
    scene->FrameWait(frame);
    scene->FrameBufferSwap();
