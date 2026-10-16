@@ -51,7 +51,16 @@ jobs:
           sed -i 's/OpenOrbis Graphics Sample/ROBERTO PS4 TEST/g' Makefile
           sed -i 's/BREW00082/ASCI10001/g' Makefile
           sed -i 's/GRAPHICSEX000000/ASCII3DTEST00000/g' Makefile
-          make
+          make pkg.gp4
+
+          # OpenOrbis packager requires older OpenSSL libraries. Keep packaging
+          # isolated inside the official Ubuntu 20.04 SDK container.
+          docker pull openorbisofficial/toolchain:v0.5.1
+          docker run --rm --user 0 \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace/ps4sdk/samples/graphics \
+            openorbisofficial/toolchain:v0.5.1 \
+            bash -ec 'PkgTool.Core pkg_build pkg.gp4 .'
           ls -lh ./*.pkg
 
       - name: Verify PS4 package exists
